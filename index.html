@@ -1,0 +1,324 @@
+<html>
+  <head>
+  <meta charset="utf-8"/>
+  <style>
+     div#chord { font-size: 15vw; }
+     div#chord_notes { font-size: small; }
+     span { display:inline-block; padding: 20px; }
+     .correct { color: green; }
+     .cursor { background-color: gray; }
+  </style>
+  <script>
+
+var changes = `
+    g1:m7 | c1:7 | g1:m7 | c1:7 |
+    f2:maj7 f:7 | bes2:7 b:dim7 | f:maj7 g:m7 | a2:m7 d:7
+    g1:m7 | c1:7 | g1:m7 | c1:7 |
+    f2:maj7 f:7 | bes2:7 b:dim7 | f:maj7 c:7 | f:maj7 |
+    a1:7 | a1:7 | d1:7 | d1:7 |
+    g1:7 | g1:7 | c1:7 | c1:7 |
+    g1:m7 | c1:7 | g1:m7 | c1:7 |
+    f2:maj7 f:7 | bes2:7 b:dim7 | f:maj7 g:m7 | a2:m7 d:7
+`;
+
+function intervals(quality) {
+    switch (quality) {
+        case 'maj7':
+            return "1 3 5 7";
+        case 'm7':
+            return "1 b3 5 b7";
+        case '7':
+            return "1 3 5 b7";
+        case 'm7.5-':
+            return "1 b3 b5 b7";
+        case 'dim7':
+            return "1 b3 b5 bb7";
+    }
+}
+
+// map a string interval to an offset representing how
+// many half-steps to reach that note from the root.
+// e.g.: "3" -> 4, "4" -> 5, "bb3" -> 2
+function interval_to_pitch(interval) {
+    var i;
+    const to_semitones = [ 0, 2, 4, 5, 7, 9, 11 ];
+    for (i = 0; i < interval.length; i++) {
+        if (interval[i] >= '1' && interval[i] <= '7') {
+            break;
+        }
+    }
+    var steps = to_semitones[parseInt(interval[i]) - 1];
+    for (var j = 0; j < i; j++) {
+        var delta = 0;
+        if (interval[j] == 'b') {
+            delta = -1;
+        }
+        if (interval[j] == '#') {
+            delta = 1;
+        }
+        steps = (steps + delta + 12) % 12;
+    }
+    return steps;
+}
+
+function note_name(root, pitch) {
+    var notes = [ "A", "Bb", "B", "C", "Db", "D",
+                  "Eb", "E", "F", "Gb", "G", "Ab" ];
+    for (var i = 0; i < notes.length; i++) {
+        if (notes[i] == root) {
+             break;
+        }
+    }
+    return notes[(i + pitch) % notes.length];
+}
+
+function normalize(note) {
+    return note.toUpperCase()
+               .replace("ES", "b")
+               .replace("IS", "#");
+}
+
+var chord_index = 0;
+var note_index = 0;
+function advance() {
+    var notes = parsed_chords[chord_index]["notes"];
+    note_index++;
+    if (note_index >= notes.length) {
+        note_index = 0;
+        chord_index = (chord_index + 1) % parsed_chords.length;
+    }
+}
+
+var parsed_chords = parse_chords(changes);
+function render_view() {
+    var chord = parsed_chords[chord_index]["chord"];
+    var notes = parsed_chords[chord_index]["notes"];
+
+    var next_index = (chord_index + 1) % parsed_chords.length;
+    var next_chord = parsed_chords[next_index]["chord"];
+
+    document.getElementById("chord").innerText = pretty_chord(chord);
+    document.getElementById("next_chord").innerText = "Next: " + pretty_chord(next_chord);
+
+    var note_spans = new Array(notes.length);
+    for (var i = 0; i < notes.length; i++) {
+        var span = document.createElement("span");
+        span.innerText = pretty_note(notes[i]);
+
+        var span_class = "";
+        if (i < note_index) {
+            span_class = "correct";
+        } else if (i == note_index) {
+            span_class = "cursor";
+        }
+        span.setAttribute("class", span_class);
+
+        note_spans[i] = span;
+    }
+    document.getElementById("chord_notes").replaceChildren(...note_spans);
+}
+
+function pretty_note(notename) {
+    return notename
+        .replace("b", "♭")
+        .replace("#", "♯");
+}
+
+function pretty_chord(chordname) {
+    var [root, quality] = chordname.split(":");
+    root = normalize(root.replace(/\d+$/, ""));
+    var nice_root = pretty_note(root);
+    var nice_q = quality
+        .replace("maj7", "∆")
+        .replace("dim7", "º")
+        .replace("m7", "-7")
+        .replace("m7.b5-", "ø");
+
+    return nice_root + nice_q;
+}
+
+function spell(chordname) {
+    var [root, quality] = chordname.split(":");
+    root = normalize(root.replace(/\d+$/, ""));
+    return intervals(quality)
+        .split(" ")
+        .map(i => note_name(root, interval_to_pitch(i)));
+}
+
+function parse_chords(chords) {
+    var chords = chords.split(/[ |]+/)
+                 .map(a => a.trim())
+                 .filter(a => a.length > 0);
+    return chords.map(
+        chord => ({
+            "chord": chord,
+            "notes": spell(chord)
+        }));
+}
+
+function autocorrelation(data) {
+    var result = new Array(data.length);
+    for (var lag = 0; lag < data.length; lag++) {
+        var cor = 0;
+        for (var j = 0; j < data.length - lag - 1; j++) {
+            cor += data[j] * data[j + lag];
+        }
+        result[lag] = cor;
+    }
+    return result
+}
+
+function peak_detection(data, sample_rate) {
+    var noise = data[0] * 0.5;
+    var rising = false;
+    var period = 0;
+
+    for (i = 1; i < data.length; i++) {
+        // look for up-slope
+        if (!rising && data[i] > noise && data[i] > data[i-1]) {
+            rising = true;
+        }
+        // down-slope
+        else if (rising && data[i] <= data[i-1]) {
+            period = i;
+            break;
+        }
+    }
+    return sample_rate / period;
+}
+
+function pitch_detector(data, sample_rate) {
+    return peak_detection(autocorrelation(data), sample_rate);
+}
+
+var note_table = [
+    ["D", 73.42],
+    ["Eb", 77.78],
+    ["E", 82.41],
+    ["F", 87.31],
+    ["Gb", 92.5],
+    ["G", 98],
+    ["Ab", 103.8],
+    ["A", 110],
+    ["Bb", 116.5],
+    ["B", 123.5],
+    ["C", 130.8],
+    ["Db", 138.6],
+    ["D", 146.8],
+    ["Eb", 155.6],
+    ["E", 164.8],
+    ["F", 174.6],
+    ["Gb", 185],
+    ["G", 196],
+    ["Ab", 207.7],
+    ["A", 220],
+    ["Bb", 233.1],
+    ["B", 246.9],
+    ["C", 261.6],
+    ["Db", 277.2],
+    ["D", 293.7],
+    ["Eb", 311.1],
+    ["E", 329.6],
+    ["F", 349.2],
+];
+
+function get_fundamental(frequency) {
+    for (var i = 1; i < 5; i++) {
+        if (frequency / i < 350) {
+            return frequency / i;
+        }
+    }
+    return Number.MAX_SAFE_INTEGER;
+}
+
+function get_note(frequency) {
+    var fundamental = get_fundamental(frequency);
+    if (fundamental == Number.MAX_SAFE_INTEGER) {
+        return null;
+    }
+    var delta = Number.MAX_SAFE_INTEGER;
+    var best_note = null;
+    note_table.forEach(([note_name, note_freq]) => {
+        var this_delta = Math.abs(fundamental - note_freq);
+        if (this_delta < delta) {
+            delta = this_delta;
+            best_note = note_name;
+        }
+    });
+    return best_note;
+}
+
+function detect_note(spectrum, sample_rate) {
+    var freq = pitch_detector(spectrum, sample_rate);
+    return get_note(freq);
+}
+
+var last_note = undefined;
+var count_same_note = 0;
+var threshold = 2;
+function on_audio(spectrum, sample_rate) {
+    var note = detect_note(spectrum, sample_rate);
+    if (last_note == note) {
+        count_same_note++;
+    } else {
+        count_same_note = 0;
+    }
+    var expected = parsed_chords[chord_index]["notes"][note_index];
+
+    document.getElementById("detected").innerText = "got: " + note;
+    if (note == expected && count_same_note > threshold) {
+        advance();
+    }
+    last_note = note;
+}
+
+var framerate = 60;
+let start;
+let last_frame;
+function update(timestamp) {
+    if (start === undefined) {
+        start = timestamp;
+        last_frame = 0;
+    }
+    const elapsed = timestamp - start;
+    const frame = elapsed * framerate / 1000;
+    if (frame > last_frame) {
+        analyser.getFloatTimeDomainData(spectrum);
+        on_audio(spectrum, context.sampleRate);
+        render_view();
+        last_frame = frame;
+    }
+    requestAnimationFrame(update);
+}
+
+let context = new AudioContext();
+let analyser = context.createAnalyser();
+const spectrum = new Float32Array(4096);
+
+function on_click() {
+    if (context.state == "suspended") {
+        context.resume();
+    }
+    analyser.smoothingTimeConstant = 0.2;
+    analyser.fftSize = spectrum.length;
+
+    navigator.mediaDevices.getUserMedia({ audio: true })
+        .then((stream) => {
+             const source = context.createMediaStreamSource(stream);
+             source.connect(analyser);
+             requestAnimationFrame(update);
+        })
+        .catch(err => console.error("media error: " + err));
+    render_view();
+}
+
+  </script>
+  </head>
+  <body>
+    <button onClick="on_click();">Click to start</button>
+    <div id="chord"></div>
+    <div id="chord_notes"></div>
+    <div id="next_chord"></div>
+    <div id="detected"></div>
+  </body>
+</html>
